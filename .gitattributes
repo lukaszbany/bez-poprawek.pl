@@ -1,0 +1,6 @@
+# końce linii LF (pliki trafiają na serwer z Linuksem)
+* text=auto eol=lf
+*.jpg binary
+*.png binary
+*.webp binary
+*.ico binary

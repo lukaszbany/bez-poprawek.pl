@@ -1,0 +1,63 @@
+# Automatyczne wgrywanie strony bez-poprawek.pl po pushu na master: rsync public/ -> /var/www/bez-poprawek.pl/public
+# na VPS 192.109.241.30 (konto deploy, klucz pozwala tylko na rsync do katalogu tej strony).
+# Konfiguracja serwera: repozytorium heatingsystems.pl-nowa, serwer/strona-wgrywanie.sh.
+# Działa po ustawieniu (Settings → Secrets and variables → Actions): sekrety DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS,
+# zmienne DEPLOY_HOST i DEPLOY_ENABLED=true. Bez DEPLOY_ENABLED zadanie jest pomijane.
+name: Wgranie bez-poprawek.pl
+
+on:
+  push:
+    branches: [master]
+    paths: ['public/**', '.github/workflows/deploy.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-strona
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  DOMENA: bez-poprawek.pl
+
+jobs:
+  deploy:
+    if: vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Kontrola plików
+        run: |
+          test -f public/index.html
+          test -f public/.htaccess
+          test -f public/polityka-prywatnosci.html
+          # strona jest statyczna – serwer nie wykonuje PHP
+          if find public -name '*.php' | grep .; then echo "Pliki .php nie zadziałają na serwerze"; exit 1; fi
+          echo "Stron: $(find public -name '*.html' | wc -l)"
+
+      - name: Klucz SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Wgranie na serwer
+        # katalog docelowy wyznacza rrsync na serwerze; --delete usuwa pliki, których nie ma w public/
+        run: |
+          rsync -rlptz --delete --omit-dir-times --chmod=D2755,F644 \
+            -e "ssh -i ~/.ssh/deploy -p 55500 -o BatchMode=yes -o StrictHostKeyChecking=yes" \
+            public/ "deploy@${{ vars.DEPLOY_HOST }}:/"
+
+      - name: Sprawdzenie strony
+        # bezpośrednio na serwer (--resolve), niezależnie od DNS
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' --resolve "$DOMENA:443:${{ vars.DEPLOY_HOST }}" "https://$DOMENA/")
+          echo "https://$DOMENA/ -> HTTP $code"
+          test "$code" = 200
